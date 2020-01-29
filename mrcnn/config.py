@@ -207,6 +207,11 @@ class Config(object):
     #     True: (don't use). Set layer in training mode even when predicting
     TRAIN_BN = False  # Defaulting to False since batch size is often small
 
+    # Generate detection masks
+    #     False: Output only bounding boxes like in Faster-RCNN
+    #     True: Generate masks as in Mask-RCNN
+    GENERATE_MASKS = True
+
     # Gradient norm clipping
     GRADIENT_CLIP_NORM = 5.0
 
