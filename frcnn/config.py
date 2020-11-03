@@ -210,7 +210,7 @@ class Config(object):
     # Generate detection masks
     #     False: Output only bounding boxes like in Faster-RCNN
     #     True: Generate masks as in Mask-RCNN
-    GENERATE_MASKS = True
+    GENERATE_MASKS = False
 
     # Gradient norm clipping
     GRADIENT_CLIP_NORM = 5.0

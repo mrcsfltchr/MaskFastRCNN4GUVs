@@ -483,7 +483,7 @@ def overlaps_graph(boxes1, boxes2):
     return overlaps
 
 
-def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config):
+def detection_targets_graph(proposals, gt_class_ids, gt_boxes, config, gt_masks=None):
     """Generates detection targets for one image. Subsamples proposals and
     generates target class IDs, bounding box deltas, and masks for each.
 
@@ -517,7 +517,9 @@ def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config)
     gt_boxes, non_zeros = trim_zeros_graph(gt_boxes, name="trim_gt_boxes")
     gt_class_ids = tf.boolean_mask(gt_class_ids, non_zeros,
                                    name="trim_gt_class_ids")
-    gt_masks = tf.gather(gt_masks, tf.where(non_zeros)[:, 0], axis=2,
+
+    if gt_masks is not None:
+        gt_masks = tf.gather(gt_masks, tf.where(non_zeros)[:, 0], axis=2,
                          name="trim_gt_masks")
 
     # Handle COCO crowds
@@ -528,7 +530,8 @@ def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config)
     crowd_boxes = tf.gather(gt_boxes, crowd_ix)
     gt_class_ids = tf.gather(gt_class_ids, non_crowd_ix)
     gt_boxes = tf.gather(gt_boxes, non_crowd_ix)
-    gt_masks = tf.gather(gt_masks, non_crowd_ix, axis=2)
+    if gt_masks is not None:
+        gt_masks = tf.gather(gt_masks, non_crowd_ix, axis=2)
 
     # Compute overlaps matrix [proposals, gt_boxes]
     overlaps = overlaps_graph(proposals, gt_boxes)
@@ -573,37 +576,37 @@ def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config)
     # Compute bbox refinement for positive ROIs
     deltas = utils.box_refinement_graph(positive_rois, roi_gt_boxes)
     deltas /= config.BBOX_STD_DEV
+    if gt_masks is not None:
+        # Assign positive ROIs to GT masks
+        # Permute masks to [N, height, width, 1]
+        transposed_masks = tf.expand_dims(tf.transpose(gt_masks, [2, 0, 1]), -1)
+        # Pick the right mask for each ROI
+        roi_masks = tf.gather(transposed_masks, roi_gt_box_assignment)
 
-    # Assign positive ROIs to GT masks
-    # Permute masks to [N, height, width, 1]
-    transposed_masks = tf.expand_dims(tf.transpose(gt_masks, [2, 0, 1]), -1)
-    # Pick the right mask for each ROI
-    roi_masks = tf.gather(transposed_masks, roi_gt_box_assignment)
+        # Compute mask targets
+        boxes = positive_rois
+        if config.USE_MINI_MASK:
+            # Transform ROI coordinates from normalized image space
+            # to normalized mini-mask space.
+            y1, x1, y2, x2 = tf.split(positive_rois, 4, axis=1)
+            gt_y1, gt_x1, gt_y2, gt_x2 = tf.split(roi_gt_boxes, 4, axis=1)
+            gt_h = gt_y2 - gt_y1
+            gt_w = gt_x2 - gt_x1
+            y1 = (y1 - gt_y1) / gt_h
+            x1 = (x1 - gt_x1) / gt_w
+            y2 = (y2 - gt_y1) / gt_h
+            x2 = (x2 - gt_x1) / gt_w
+            boxes = tf.concat([y1, x1, y2, x2], 1)
+        box_ids = tf.range(0, tf.shape(roi_masks)[0])
+        masks = tf.image.crop_and_resize(tf.cast(roi_masks, tf.float32), boxes,
+                                        box_ids,
+                                        config.MASK_SHAPE)
+        # Remove the extra dimension from masks.
+        masks = tf.squeeze(masks, axis=3)
 
-    # Compute mask targets
-    boxes = positive_rois
-    if config.USE_MINI_MASK:
-        # Transform ROI coordinates from normalized image space
-        # to normalized mini-mask space.
-        y1, x1, y2, x2 = tf.split(positive_rois, 4, axis=1)
-        gt_y1, gt_x1, gt_y2, gt_x2 = tf.split(roi_gt_boxes, 4, axis=1)
-        gt_h = gt_y2 - gt_y1
-        gt_w = gt_x2 - gt_x1
-        y1 = (y1 - gt_y1) / gt_h
-        x1 = (x1 - gt_x1) / gt_w
-        y2 = (y2 - gt_y1) / gt_h
-        x2 = (x2 - gt_x1) / gt_w
-        boxes = tf.concat([y1, x1, y2, x2], 1)
-    box_ids = tf.range(0, tf.shape(roi_masks)[0])
-    masks = tf.image.crop_and_resize(tf.cast(roi_masks, tf.float32), boxes,
-                                     box_ids,
-                                     config.MASK_SHAPE)
-    # Remove the extra dimension from masks.
-    masks = tf.squeeze(masks, axis=3)
-
-    # Threshold mask pixels at 0.5 to have GT masks be 0 or 1 to use with
-    # binary cross entropy loss.
-    masks = tf.round(masks)
+        # Threshold mask pixels at 0.5 to have GT masks be 0 or 1 to use with
+        # binary cross entropy loss.
+        masks = tf.round(masks)
 
     # Append negative ROIs and pad bbox deltas and masks that
     # are not used for negative ROIs with zeros.
@@ -614,10 +617,12 @@ def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config)
     roi_gt_boxes = tf.pad(roi_gt_boxes, [(0, N + P), (0, 0)])
     roi_gt_class_ids = tf.pad(roi_gt_class_ids, [(0, N + P)])
     deltas = tf.pad(deltas, [(0, N + P), (0, 0)])
-    masks = tf.pad(masks, [[0, N + P], (0, 0), (0, 0)])
+    
+    if gt_masks is not None:
+        masks = tf.pad(masks, [[0, N + P], (0, 0), (0, 0)])
 
-    return rois, roi_gt_class_ids, deltas, masks
-
+        return rois, roi_gt_class_ids, deltas, masks
+    return rois, roi_gt_class_ids, deltas
 
 class DetectionTargetLayer(KE.Layer):
     """Subsamples proposals and generates target box refinement, class_ids,
@@ -652,16 +657,28 @@ class DetectionTargetLayer(KE.Layer):
         proposals = inputs[0]
         gt_class_ids = inputs[1]
         gt_boxes = inputs[2]
-        gt_masks = inputs[3]
+        if self.config.GENERATE_MASKS:
+            gt_masks = inputs[3]
 
-        # Slice the batch and run a graph for each slice
-        # TODO: Rename target_bbox to target_deltas for clarity
-        names = ["rois", "target_class_ids", "target_bbox", "target_mask"]
-        outputs = utils.batch_slice(
-            [proposals, gt_class_ids, gt_boxes, gt_masks],
-            lambda w, x, y, z: detection_targets_graph(
-                w, x, y, z, self.config),
-            self.config.IMAGES_PER_GPU, names=names)
+
+
+            # Slice the batch and run a graph for each slice
+            # TODO: Rename target_bbox to target_deltas for clarity
+            names = ["rois", "target_class_ids", "target_bbox", "target_mask"]
+            outputs = utils.batch_slice(
+                [proposals, gt_class_ids, gt_boxes, gt_masks],
+                lambda w, x, y, z: detection_targets_graph(
+                    w, x, y, self.config,z ),
+                self.config.IMAGES_PER_GPU, names=names)
+
+        else:
+            names = ["rois", "target_class_ids", "target_bbox"]
+            outputs = utils.batch_slice(
+                [proposals, gt_class_ids, gt_boxes],
+                lambda w, x, y: detection_targets_graph(
+                    w, x, y, self.config),
+                self.config.IMAGES_PER_GPU, names=names)
+
         return outputs
 
     def compute_output_shape(self, input_shape):
@@ -1212,7 +1229,10 @@ def load_image_gt(dataset, config, image_id, augment=False, augmentation=None,
     if config.GENERATE_MASKS:
 
         mask, class_ids = dataset.load_mask(image_id)
-    
+    else:
+        bbox, class_ids = dataset.load_bboxes(image_id)
+
+
 
     original_shape = image.shape
     image, window, scale, padding, crop = utils.resize_image(
@@ -1277,7 +1297,7 @@ def load_image_gt(dataset, config, image_id, augment=False, augmentation=None,
             # bbox: [num_instances, (y1, x1, y2, x2)]
             bbox = utils.extract_bboxes(mask)
         else:
-            dataset.load_bboxes(image_id)
+            bbox,class_ids = dataset.load_bboxes(image_id)
 
     # Active classes
     # Different datasets have different classes, so track the
@@ -1721,31 +1741,31 @@ def data_generator(dataset, config, shuffle=True, augment=False, augmentation=No
 
             
 
-                # If the image source is not to be augmented pass None as augmentation
-                if dataset.image_info[image_id]['source'] in no_augmentation_sources:
-                    if config.GENERATE_MASKS:
-                        image, image_meta, gt_class_ids, gt_boxes, gt_masks = \
+            # If the image source is not to be augmented pass None as augmentation
+            if dataset.image_info[image_id]['source'] in no_augmentation_sources:
+                if config.GENERATE_MASKS:
+                    image, image_meta, gt_class_ids, gt_boxes, gt_masks = \
+                    load_image_gt(dataset, config, image_id, augment=augment,
+                                augmentation=None,
+                                use_mini_mask=config.USE_MINI_MASK)
+                else:
+                    image, image_meta, gt_class_ids, gt_boxes  = \
+                    load_image_gt(dataset, config, image_id, augment=augment,
+                                augmentation=None,
+                                use_mini_mask=config.USE_MINI_MASK)
+            else:
+                if config.GENERATE_MASKS:
+
+                    image, image_meta, gt_class_ids, gt_boxes, gt_masks = \
                         load_image_gt(dataset, config, image_id, augment=augment,
-                                    augmentation=None,
-                                    use_mini_mask=config.USE_MINI_MASK)
-                    else:
-                        image, image_meta, gt_class_ids, gt_boxes  = \
-                        load_image_gt(dataset, config, image_id, augment=augment,
-                                    augmentation=None,
+                                    augmentation=augmentation,
                                     use_mini_mask=config.USE_MINI_MASK)
                 else:
-                    if config.GENERATE_MASKS:
-
-                        image, image_meta, gt_class_ids, gt_boxes, gt_masks = \
-                            load_image_gt(dataset, config, image_id, augment=augment,
-                                        augmentation=augmentation,
-                                        use_mini_mask=config.USE_MINI_MASK)
-                    else:
-                        image, image_meta, gt_class_ids, gt_boxes = \
-                            load_image_gt(dataset, config, image_id, augment=augment,
-                                        augmentation=augmentation,
-                                        use_mini_mask=config.USE_MINI_MASK)
-            
+                    image, image_meta, gt_class_ids, gt_boxes = \
+                        load_image_gt(dataset, config, image_id, augment=augment,
+                                    augmentation=augmentation,
+                                    use_mini_mask=config.USE_MINI_MASK)
+        
 
             # Skip images that have no instances. This can happen in cases
             # where we train on a subset of classes and the image doesn't
@@ -1933,15 +1953,16 @@ class MaskRCNN():
                 x, K.shape(input_image)[1:3]))(input_gt_boxes)
             # 3. GT Masks (zero padded)
             # [batch, height, width, MAX_GT_INSTANCES]
-            if config.USE_MINI_MASK:
-                input_gt_masks = KL.Input(
-                    shape=[config.MINI_MASK_SHAPE[0],
-                           config.MINI_MASK_SHAPE[1], None],
-                    name="input_gt_masks", dtype=bool)
-            else:
-                input_gt_masks = KL.Input(
-                    shape=[config.IMAGE_SHAPE[0], config.IMAGE_SHAPE[1], None],
-                    name="input_gt_masks", dtype=bool)
+            if config.GENERATE_MASKS:
+                if config.USE_MINI_MASK:
+                    input_gt_masks = KL.Input(
+                        shape=[config.MINI_MASK_SHAPE[0],
+                            config.MINI_MASK_SHAPE[1], None],
+                        name="input_gt_masks", dtype=bool)
+                else:
+                    input_gt_masks = KL.Input(
+                        shape=[config.IMAGE_SHAPE[0], config.IMAGE_SHAPE[1], None],
+                        name="input_gt_masks", dtype=bool)
         elif mode == "inference":
             # Anchors in normalized coordinates
             input_anchors = KL.Input(shape=[None, 4], name="input_anchors")
@@ -2042,9 +2063,14 @@ class MaskRCNN():
             # Subsamples proposals and generates target outputs for training
             # Note that proposal class IDs, gt_boxes, and gt_masks are zero
             # padded. Equally, returned rois and targets are zero padded.
-            rois, target_class_ids, target_bbox, target_mask =\
-                DetectionTargetLayer(config, name="proposal_targets")([
-                    target_rois, input_gt_class_ids, gt_boxes, input_gt_masks])
+            if config.GENERATE_MASKS:
+                rois, target_class_ids, target_bbox, target_mask =\
+                    DetectionTargetLayer(config, name="proposal_targets")([
+                        target_rois, input_gt_class_ids, gt_boxes, input_gt_masks])
+            else:
+                rois, target_class_ids, target_bbox =\
+                    DetectionTargetLayer(config, name="proposal_targets")([
+                        target_rois, input_gt_class_ids, gt_boxes])
 
             # Network Heads
             # TODO: verify that this handles zero padded ROIs
@@ -2238,9 +2264,13 @@ class MaskRCNN():
         # First, clear previously set losses to avoid duplication
         self.keras_model._losses = []
         self.keras_model._per_input_losses = {}
+        
         loss_names = [
             "rpn_class_loss",  "rpn_bbox_loss",
             "mrcnn_class_loss", "mrcnn_bbox_loss", "mrcnn_mask_loss"]
+        if not self.config.GENERATE_MASKS:
+            loss_names = loss_names[:-1]
+            
         for name in loss_names:
             layer = self.keras_model.get_layer(name)
             if layer.output in self.keras_model.losses:
