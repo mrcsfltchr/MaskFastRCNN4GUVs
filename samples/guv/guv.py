@@ -41,7 +41,7 @@ import cv2
 ROOT_DIR = os.path.abspath("../../")
 
 # Import Mask RCNN
-sys.path.append(ROOT_DIR) 
+#sys.path.append(ROOT_DIR) 
 
 from frcnn.config import Config
 import frcnn.model as modellib 
@@ -90,7 +90,7 @@ class GUVConfig(Config):
     IMAGE_MAX_DIM = 128
 
     # Max number of final detections
-    DETECTION_MAX_INSTANCES = 10
+    DETECTION_MAX_INSTANCES = 15
 
     # Number of color channels per image. RGB = 3, grayscale = 1, RGB-D = 4
     # Changing this requires other changes in the code. See the WIKI for more

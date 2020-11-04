@@ -2302,8 +2302,9 @@ class MaskRCNN():
             loss = (
                 tf.reduce_mean(layer.output, keepdims=True)
                 * self.config.LOSS_WEIGHTS.get(name, 1.))
-            self.keras_model.metrics_tensors.append(loss)
-
+            #self.keras_model.metrics_tensors.append(loss)
+            self.keras_model.metrics.append(loss)
+            
     def set_trainable(self, layer_regex, keras_model=None, indent=0, verbose=1):
         """Sets model layers as trainable if their names match
         the given regular expression.
@@ -2520,8 +2521,8 @@ class MaskRCNN():
         windows = np.stack(windows)
         return molded_images, image_metas, windows
 
-    def unmold_detections(self, detections, mrcnn_mask, original_image_shape,
-                          image_shape, window):
+    def unmold_detections(self, detections, original_image_shape,
+                          image_shape, window,mrcnn_mask = None):
         """Reformats the detections of one image from the format of the neural
         network output to a format suitable for use in the rest of the
         application.
@@ -2729,7 +2730,7 @@ class MaskRCNN():
             for i, image in enumerate(molded_images):
                 window = [0, 0, image.shape[0], image.shape[1]]
                 final_rois, final_class_ids, final_scores =\
-                    self.unmold_detections(detections[i], mrcnn_mask[i],
+                    self.unmold_detections(detections[i],
                                         image.shape, molded_images[i].shape,
                                         window)
                 results.append({

@@ -25,7 +25,7 @@ ROOT_DIR = os.path.abspath("../")
 
 # Import Mask RCNN
 sys.path.append(ROOT_DIR)  # To find local version of the library
-from mrcnn import utils
+from frcnn import utils
 
 
 ############################################################
@@ -80,10 +80,10 @@ def apply_mask(image, mask, color, alpha=0.5):
     return image
 
 
-def display_instances(image, boxes, masks, class_ids, class_names,
+def display_instances(image, boxes, class_ids, class_names, masks= None,
                       scores=None, title="",
                       figsize=(16, 16), ax=None,
-                      show_mask=True, show_bbox=True,
+                      show_mask=False, show_bbox=True,
                       colors=None, captions=None):
     """
     boxes: [num_instance, (y1, x1, y2, x2, class_id)] in image coordinates.
@@ -134,6 +134,7 @@ def display_instances(image, boxes, masks, class_ids, class_names,
             # Skip this instance. Has no bbox. Likely lost in image cropping.
             continue
         y1, x1, y2, x2 = boxes[i]
+        print(boxes[i])
         if show_bbox:
             p = patches.Rectangle((x1, y1), x2 - x1, y2 - y1, linewidth=2,
                                 alpha=0.7, linestyle="dashed",
@@ -173,16 +174,16 @@ def display_instances(image, boxes, masks, class_ids, class_names,
 
 
 def display_differences(image,
-                        gt_box, gt_class_id, gt_mask,
-                        pred_box, pred_class_id, pred_score, pred_mask,
-                        class_names, title="", ax=None,
+                        gt_box, gt_class_id, 
+                        pred_box, pred_class_id, pred_score,
+                        class_names, gt_mask= None, pred_mask = None,title="", ax=None,
                         show_mask=True, show_box=True,
                         iou_threshold=0.5, score_threshold=0.5):
     """Display ground truth and prediction instances on the same image."""
     # Match predictions to ground truth
     gt_match, pred_match, overlaps = utils.compute_matches(
-        gt_box, gt_class_id, gt_mask,
-        pred_box, pred_class_id, pred_score, pred_mask,
+        gt_box, gt_class_id,
+        pred_box, pred_class_id, pred_score, gt_mask,pred_mask,
         iou_threshold=iou_threshold, score_threshold=score_threshold)
     # Ground truth = green. Predictions = red
     colors = [(0, 1, 0, .8)] * len(gt_match)\
@@ -191,7 +192,10 @@ def display_differences(image,
     class_ids = np.concatenate([gt_class_id, pred_class_id])
     scores = np.concatenate([np.zeros([len(gt_match)]), pred_score])
     boxes = np.concatenate([gt_box, pred_box])
-    masks = np.concatenate([gt_mask, pred_mask], axis=-1)
+    if gt_mask is not None:
+        masks = np.concatenate([gt_mask, pred_mask], axis=-1)
+    else:
+        masks = None
     # Captions per instance show score/IoU
     captions = ["" for m in gt_match] + ["{:.2f} / {:.2f}".format(
         pred_score[i],
@@ -203,8 +207,8 @@ def display_differences(image,
     # Display
     display_instances(
         image,
-        boxes, masks, class_ids,
-        class_names, scores, ax=ax,
+        boxes, class_ids,
+        class_names,masks, scores, ax=ax,
         show_bbox=show_box, show_mask=show_mask,
         colors=colors, captions=captions,
         title=title)

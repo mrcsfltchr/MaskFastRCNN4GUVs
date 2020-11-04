@@ -351,12 +351,18 @@ class Dataset(object):
         debugging.
         """
         return self.image_info[image_id]["path"]
-
+    
+    def uint162uint8(self,image):
+        image = image/np.max(image)
+        image = 255*image
+        return image.astype(np.uint8)
+    
     def load_image(self, image_id):
         """Load the specified image and return a [H,W,3] Numpy array.
         """
         # Load image
         image = skimage.io.imread(self.image_info[image_id]['path'])
+        image = self.uint162uint8(image)
         # If grayscale. Convert to RGB for consistency.
         if image.ndim != 3:
             image = skimage.color.gray2rgb(image)
@@ -653,8 +659,8 @@ def trim_zeros(x):
     return x[~np.all(x == 0, axis=1)]
 
 
-def compute_matches(gt_boxes, gt_class_ids, gt_masks,
-                    pred_boxes, pred_class_ids, pred_scores, pred_masks,
+def compute_matches(gt_boxes, gt_class_ids, 
+                    pred_boxes, pred_class_ids, pred_scores, gt_masks =None,pred_masks = None,
                     iou_threshold=0.5, score_threshold=0.0):
     """Finds matches between prediction and ground truth instances.
 
@@ -668,7 +674,8 @@ def compute_matches(gt_boxes, gt_class_ids, gt_masks,
     # Trim zero padding
     # TODO: cleaner to do zero unpadding upstream
     gt_boxes = trim_zeros(gt_boxes)
-    gt_masks = gt_masks[..., :gt_boxes.shape[0]]
+    if gt_masks is not None:
+        gt_masks = gt_masks[..., :gt_boxes.shape[0]]
     pred_boxes = trim_zeros(pred_boxes)
     pred_scores = pred_scores[:pred_boxes.shape[0]]
     # Sort predictions by score from high to low
@@ -676,11 +683,14 @@ def compute_matches(gt_boxes, gt_class_ids, gt_masks,
     pred_boxes = pred_boxes[indices]
     pred_class_ids = pred_class_ids[indices]
     pred_scores = pred_scores[indices]
-    pred_masks = pred_masks[..., indices]
+    if gt_masks is not None:
+        pred_masks = pred_masks[..., indices]
 
-    # Compute IoU overlaps [pred_masks, gt_masks]
-    overlaps = compute_overlaps_masks(pred_masks, gt_masks)
-
+        # Compute IoU overlaps [pred_masks, gt_masks]
+        overlaps = compute_overlaps_masks(pred_masks, gt_masks)
+    else:
+        overlaps = compute_overlaps(pred_boxes,gt_boxes)
+        
     # Loop through predictions and find matching ground truth boxes
     match_count = 0
     pred_match = -1 * np.ones([pred_boxes.shape[0]])
@@ -712,8 +722,8 @@ def compute_matches(gt_boxes, gt_class_ids, gt_masks,
     return gt_match, pred_match, overlaps
 
 
-def compute_ap(gt_boxes, gt_class_ids, gt_masks,
-               pred_boxes, pred_class_ids, pred_scores, pred_masks,
+def compute_ap(gt_boxes, gt_class_ids,
+               pred_boxes, pred_class_ids, pred_scores,  gt_masks = None,pred_masks= None,
                iou_threshold=0.5):
     """Compute Average Precision at a set IoU threshold (default 0.5).
 
@@ -725,8 +735,8 @@ def compute_ap(gt_boxes, gt_class_ids, gt_masks,
     """
     # Get matches and overlaps
     gt_match, pred_match, overlaps = compute_matches(
-        gt_boxes, gt_class_ids, gt_masks,
-        pred_boxes, pred_class_ids, pred_scores, pred_masks,
+        gt_boxes, gt_class_ids, 
+        pred_boxes, pred_class_ids, pred_scores, gt_masks,pred_masks,
         iou_threshold)
 
     # Compute precision and recall at each prediction box step
@@ -751,8 +761,8 @@ def compute_ap(gt_boxes, gt_class_ids, gt_masks,
     return mAP, precisions, recalls, overlaps
 
 
-def compute_ap_range(gt_box, gt_class_id, gt_mask,
-                     pred_box, pred_class_id, pred_score, pred_mask,
+def compute_ap_range(gt_box, gt_class_id, 
+                     pred_box, pred_class_id, pred_score,gt_mask=None, pred_mask=None,
                      iou_thresholds=None, verbose=1):
     """Compute AP over a range or IoU thresholds. Default range is 0.5-0.95."""
     # Default is 0.5 to 0.95 with increments of 0.05
@@ -762,8 +772,8 @@ def compute_ap_range(gt_box, gt_class_id, gt_mask,
     AP = []
     for iou_threshold in iou_thresholds:
         ap, precisions, recalls, overlaps =\
-            compute_ap(gt_box, gt_class_id, gt_mask,
-                        pred_box, pred_class_id, pred_score, pred_mask,
+            compute_ap(gt_box, gt_class_id, 
+                        pred_box, pred_class_id, pred_score, gt_mask,pred_mask,
                         iou_threshold=iou_threshold)
         if verbose:
             print("AP @{:.2f}:\t {:.3f}".format(iou_threshold, ap))

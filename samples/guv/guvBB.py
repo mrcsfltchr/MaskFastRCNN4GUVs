@@ -5,10 +5,7 @@ import sys
 
 # Root directory of the project
 ROOT_DIR = os.path.abspath("../../")
-
-# Import Mask RCNN
-sys.path.append(ROOT_DIR) 
-
+# sys.path.append(ROOT_DIR)
 from guv import GUVDataset, GUVConfig
 from frcnn.utils import extract_bboxes
 import frcnn.model as modellib 
@@ -236,7 +233,7 @@ def train(model):
     print("Training network heads")
     model.train(dataset_train, dataset_val,
                 learning_rate=config.LEARNING_RATE,
-                epochs=20,
+                epochs=40,
                 layers='heads')
 
 
